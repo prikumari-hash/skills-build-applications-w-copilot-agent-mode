@@ -87,13 +87,27 @@ export async function listTeams() {
 
 export async function createTeam(input: unknown) {
   const { name, mascot, members } = parseTeamInput(input);
+  let previousTeamIds: mongoose.Types.ObjectId[] = [];
   if (members.length > 0) {
-    const existingMembers = await User.countDocuments({ _id: { $in: members } });
-    if (existingMembers !== new Set(members.map((member) => member.toString())).size) {
+    const users = await User.find({ _id: { $in: members } }).select('_id team').lean();
+    if (users.length !== members.length) {
       throw requestError('One or more team members do not exist', 404);
     }
+    previousTeamIds = users.flatMap((user) => user.team ? [user.team] : []);
   }
-  return Team.create({ name, mascot, members });
+  const team = await Team.create({ name, mascot, members });
+  if (members.length > 0) {
+    await Promise.all([
+      previousTeamIds.length > 0
+        ? Team.updateMany(
+            { _id: { $in: previousTeamIds } },
+            { $pull: { members: { $in: members } } },
+          )
+        : Promise.resolve(),
+      User.updateMany({ _id: { $in: members } }, { $set: { team: team._id } }),
+    ]);
+  }
+  return team;
 }
 
 export async function getLeaderboard() {
